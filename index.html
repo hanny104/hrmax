@@ -374,6 +374,117 @@ async function fetchGroupData(prefix, dateRange){
   return { sessionsRes, eventsRes };
 }
 
+async function fetchSourceMediumData(prefix, dateRange){
+  const sessionsBody = {
+    dateRanges: [dateRange],
+    dimensions: [{name:"sessionSourceMedium"}],
+    metrics: [{name:"sessions"}],
+    dimensionFilter: {
+      filter: { fieldName:"pagePath", stringFilter:{ matchType:"BEGINS_WITH", value: prefix } }
+    },
+    orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+    limit: 100000
+  };
+
+  const eventsBody = {
+    dateRanges: [dateRange],
+    dimensions: [{name:"sessionSourceMedium"}, {name:"eventName"}],
+    metrics: [{name:"eventCount"}],
+    dimensionFilter: {
+      andGroup: {
+        expressions: [
+          { filter: { fieldName:"pagePath", stringFilter:{ matchType:"BEGINS_WITH", value: prefix } } },
+          { filter: { fieldName:"eventName", inListFilter:{ values: EVENT_NAMES } } }
+        ]
+      }
+    },
+    limit: 100000
+  };
+
+  const [sessionsRes, eventsRes] = await Promise.all([
+    runReport(sessionsBody),
+    runReport(eventsBody)
+  ]);
+
+  return { sessionsRes, eventsRes };
+}
+
+function aggregateSourceMedium(sessionsRes, eventsRes){
+  const stats = {};
+  const ensure = (key) => {
+    if(!stats[key]) stats[key] = { sessions:0, events:{}, total:0 };
+    return stats[key];
+  };
+
+  (sessionsRes.rows || []).forEach(row => {
+    const key = row.dimensionValues[0].value;
+    const sessions = parseInt(row.metricValues[0].value, 10) || 0;
+    ensure(key).sessions += sessions;
+  });
+
+  (eventsRes.rows || []).forEach(row => {
+    const key = row.dimensionValues[0].value;
+    const eventName = row.dimensionValues[1].value;
+    const count = parseInt(row.metricValues[0].value, 10) || 0;
+    const stat = ensure(key);
+    stat.events[eventName] = (stat.events[eventName] || 0) + count;
+    stat.total += count;
+  });
+
+  return stats;
+}
+
+function renderSourceMediumTable(group, stats){
+  const keys = Object.keys(stats).sort((a,b) => stats[b].sessions - stats[a].sessions);
+  let totalSessions = 0, totalConv = 0;
+  const eventTotals = {}; EVENT_NAMES.forEach(e => eventTotals[e] = 0);
+
+  const rows = keys.map(key => {
+    const stat = stats[key];
+    const sessions = stat.sessions;
+    const conv = stat.total;
+    const cvr = sessions > 0 ? (conv / sessions * 100) : 0;
+    totalSessions += sessions;
+    totalConv += conv;
+    EVENT_NAMES.forEach(e => eventTotals[e] += (stat.events[e] || 0));
+
+    return `<tr>
+      <td><span class="folder-name">${key}</span></td>
+      <td>${fmt(sessions)}</td>
+      ${EVENT_NAMES.map(e => `<td>${fmt(stat.events[e]||0)}</td>`).join("")}
+      <td>${fmt(conv)}</td>
+      <td class="${cvrClass(cvr)}">${cvr.toFixed(2)}%</td>
+    </tr>`;
+  }).join("");
+
+  const totalCvr = totalSessions > 0 ? (totalConv / totalSessions * 100) : 0;
+  const totalRow = `<tr class="total-row">
+    <td>合計</td>
+    <td>${fmt(totalSessions)}</td>
+    ${EVENT_NAMES.map(e => `<td>${fmt(eventTotals[e])}</td>`).join("")}
+    <td>${fmt(totalConv)}</td>
+    <td>${totalCvr.toFixed(2)}%</td>
+  </tr>`;
+
+  return `
+    <section class="group">
+      <h2>${group.label} <span class="path-tag">依來源/媒介</span></h2>
+      <p class="desc">來源/媒介（sessionSourceMedium）× 工作階段與轉換次數，依工作階段排序</p>
+      <table>
+        <thead>
+          <tr>
+            <th>來源 / 媒介</th>
+            <th>工作階段</th>
+            ${EVENT_NAMES.map(e => `<th>${e}</th>`).join("")}
+            <th>轉換總數</th>
+            <th>CVR</th>
+          </tr>
+        </thead>
+        <tbody>${rows}${totalRow}</tbody>
+      </table>
+    </section>`;
+}
+
 /* 把 pagePath 對應到子資料夾名稱；不屬於任何子資料夾就算根目錄 */
 function resolveFolder(pagePath, prefix, folders){
   const rest = pagePath.startsWith(prefix) ? pagePath.slice(prefix.length) : null;
@@ -500,6 +611,10 @@ async function loadData(){
       const folderStats = aggregateGroup(group, sessionsRes, eventsRes);
       const { html, totalSessions, totalConv, totalCvr } = renderGroupTable(group, folderStats);
       groupsHtml += html;
+
+      const smData = await fetchSourceMediumData(group.prefix, dateRange);
+      const smStats = aggregateSourceMedium(smData.sessionsRes, smData.eventsRes);
+      groupsHtml += renderSourceMediumTable(group, smStats);
 
       overviewHtml += `
         <div class="kpi ${group.key === 'hrm104' ? 'rose' : ''}">
