@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HRMax 數據儀表板</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+  :root{
+    --ink:#1c2430;
+    --ink-soft:#5b6472;
+    --paper:#f6f7f9;
+    --card:#ffffff;
+    --line:#e3e6ea;
+    --navy:#233248;
+    --navy-deep:#141c29;
+    --teal:#1f7a6c;
+    --teal-soft:#e6f2ef;
+    --amber:#c17a2b;
+    --amber-soft:#faf1e5;
+    --rose:#b8425a;
+    --rose-soft:#f7e8ec;
+    --mono: 'SF Mono', 'Consolas', monospace;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    font-family: -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+    background:var(--paper);
+    color:var(--ink);
+  }
+  header{
+    background:linear-gradient(135deg,var(--navy-deep),var(--navy));
+    color:#fff;
+    padding:28px 32px 24px;
+  }
+  header .top{
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-start;
+    gap:16px;
+    flex-wrap:wrap;
+  }
+  header h1{
+    margin:0;
+    font-size:22px;
+    letter-spacing:0.3px;
+    font-weight:600;
+  }
+  header .eyebrow{
+    font-size:12px;
+    text-transform:uppercase;
+    letter-spacing:1.5px;
+    color:#9fb0c4;
+    margin-bottom:6px;
+  }
+  #g_id_login, #status-bar{
+    display:flex;
+    align-items:center;
+    gap:12px;
+  }
+  #status-bar{font-size:13px;color:#c8d3e0;}
+  .controls{
+    margin-top:20px;
+    display:flex;
+    align-items:center;
+    gap:10px;
+    flex-wrap:wrap;
+  }
+  .controls select, .controls input[type=date]{
+    background:rgba(255,255,255,0.08);
+    border:1px solid rgba(255,255,255,0.25);
+    color:#fff;
+    padding:7px 10px;
+    border-radius:6px;
+    font-size:13px;
+  }
+  .controls button{
+    background:var(--teal);
+    color:#fff;
+    border:none;
+    padding:8px 18px;
+    border-radius:6px;
+    font-size:13px;
+    font-weight:600;
+    cursor:pointer;
+    letter-spacing:0.3px;
+  }
+  .controls button:hover{background:#186257;}
+  .controls button:disabled{background:#5b6472;cursor:not-allowed;}
+  .custom-range{display:none;align-items:center;gap:8px;}
+  .custom-range.show{display:flex;}
+
+  main{padding:28px 32px 60px; max-width:1180px; margin:0 auto;}
+  .hint{
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:40px 32px;
+    text-align:center;
+    color:var(--ink-soft);
+    font-size:14px;
+    line-height:1.8;
+  }
+  .hint b{color:var(--ink);}
+
+  .overview{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+    gap:16px;
+    margin-bottom:28px;
+  }
+  .kpi{
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:18px 20px;
+    border-top:3px solid var(--navy);
+  }
+  .kpi.rose{border-top-color:var(--rose);}
+  .kpi .label{font-size:12px;color:var(--ink-soft);letter-spacing:0.4px;margin-bottom:8px;}
+  .kpi .value{font-size:26px;font-weight:700;font-family:var(--mono);}
+  .kpi .sub{font-size:12px;color:var(--ink-soft);margin-top:4px;}
+
+  section.group{margin-bottom:36px;}
+  section.group h2{
+    font-size:16px;
+    margin:0 0 4px;
+    color:var(--navy);
+    display:flex;
+    align-items:center;
+    gap:8px;
+  }
+  section.group .path-tag{
+    font-family:var(--mono);
+    font-size:11px;
+    background:var(--teal-soft);
+    color:var(--teal);
+    padding:2px 8px;
+    border-radius:4px;
+  }
+  section.group .desc{font-size:12px;color:var(--ink-soft);margin:0 0 14px;}
+
+  table{
+    width:100%;
+    border-collapse:collapse;
+    background:var(--card);
+    border-radius:10px;
+    overflow:hidden;
+    border:1px solid var(--line);
+    font-size:13px;
+  }
+  thead th{
+    background:#eef1f4;
+    text-align:right;
+    padding:10px 14px;
+    font-weight:600;
+    color:var(--ink-soft);
+    font-size:11.5px;
+    letter-spacing:0.3px;
+    border-bottom:1px solid var(--line);
+  }
+  thead th:first-child, tbody td:first-child{text-align:left;}
+  tbody td{
+    padding:10px 14px;
+    text-align:right;
+    border-bottom:1px solid #eef0f2;
+    font-family:var(--mono);
+    font-size:13px;
+  }
+  tbody td:first-child{font-family:inherit; font-size:13px;}
+  tbody tr:last-child td{border-bottom:none;}
+  tbody tr:hover{background:#fbfbfc;}
+  tbody tr.total-row td{
+    font-weight:700;
+    background:#f4f6f8;
+    border-top:2px solid var(--line);
+  }
+  .cvr-high{color:var(--teal); font-weight:700;}
+  .cvr-mid{color:var(--amber); font-weight:700;}
+  .cvr-zero{color:#b7bec7;}
+  .folder-name{color:var(--ink);}
+  .folder-root{color:var(--ink-soft); font-style:italic;}
+
+  footer{
+    text-align:center;
+    color:var(--ink-soft);
+    font-size:11.5px;
+    padding:20px;
+  }
+  .error-box{
+    background:var(--rose-soft);
+    border:1px solid var(--rose);
+    color:#7a2c3e;
+    padding:14px 18px;
+    border-radius:8px;
+    font-size:13px;
+    margin-bottom:20px;
+    white-space:pre-wrap;
+  }
+  .spinner{
+    display:inline-block;width:14px;height:14px;
+    border:2px solid rgba(255,255,255,0.4);
+    border-top-color:#fff;border-radius:50%;
+    animation:spin 0.8s linear infinite;
+  }
+  @keyframes spin{to{transform:rotate(360deg);}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="top">
+    <div>
+      <div class="eyebrow">HRMax · 104hrm 流量與轉換</div>
+      <h1>HRMax 數據儀表板</h1>
+    </div>
+    <div id="auth-area">
+      <button id="login-btn" class="controls-login" onclick="startLogin()"
+        style="background:#fff;color:var(--navy);border:none;padding:9px 20px;border-radius:6px;font-weight:600;font-size:13px;cursor:pointer;">
+        使用 Google 帳號登入
+      </button>
+      <div id="status-bar" style="display:none;"></div>
+    </div>
+  </div>
+
+  <div class="controls" id="controls" style="display:none;">
+    <select id="range-select" onchange="onRangeChange()">
+      <option value="7">最近 7 天</option>
+      <option value="28" selected>最近 28 天</option>
+      <option value="90">最近 90 天</option>
+      <option value="custom">自訂區間</option>
+    </select>
+    <div class="custom-range" id="custom-range">
+      <input type="date" id="start-date">
+      <span style="color:#c8d3e0;">至</span>
+      <input type="date" id="end-date">
+    </div>
+    <button id="refresh-btn" onclick="loadData()">重新整理</button>
+    <span id="last-updated" style="font-size:12px;color:#9fb0c4;"></span>
+  </div>
+</header>
+
+<main>
+  <div id="content">
+    <div class="hint">
+      請先點右上角「使用 Google 帳號登入」，登入你有 GA4 檢視權限的 Google 帳號。<br>
+      登入後會自動抓取 <b>HRMax</b> 與 <b>104hrm</b> 兩個子網頁的工作階段與轉換數據。
+    </div>
+  </div>
+</main>
+
+<footer>HRMax Dashboard · 資料來源：GA4 Property 5358064330</footer>
+
+<script>
+/* ========== 基本設定 ========== */
+const CLIENT_ID = "417683337134-ls6qmihi75eldh7dm3jjkd0qpg1fgh05.apps.googleusercontent.com";
+const PROPERTY_ID = "5358064330";
+const SCOPE = "https://www.googleapis.com/auth/analytics.readonly";
+const EVENT_NAMES = ["max_btn", "max_btn_b", "3+1_btn"];
+
+// 兩個子網頁群組與各自的子資料夾
+const GROUPS = [
+  {
+    key: "hrmax",
+    label: "HRMax",
+    prefix: "/products/HRMax/",
+    folders: [
+      "ESG","ai-hr-buddy","schedulingexpert","functions","bpm","lms",
+      "FAQ","case","ehrms","catering_retail","article","event_sale",
+      "high-tech-manufacturing","cloud_api","104only","construction"
+    ]
+  },
+  {
+    key: "hrm104",
+    label: "104hrm",
+    prefix: "/products/104hrm/",
+    folders: ["laborlaw","catering_retail"]
+  }
+];
+
+let accessToken = null;
+
+/* ========== 登入 ========== */
+function startLogin(){
+  const client = google.accounts.oauth2.initTokenClient({
+    client_id: CLIENT_ID,
+    scope: SCOPE,
+    callback: (resp) => {
+      if(resp.error){
+        showError("登入失敗：" + resp.error + "\n\n若訊息提到「未驗證」或「測試名單」，請確認你的 Google 帳號已被加入 OAuth 同意畫面的測試使用者清單。");
+        return;
+      }
+      accessToken = resp.access_token;
+      document.getElementById("login-btn").style.display = "none";
+      const statusBar = document.getElementById("status-bar");
+      statusBar.style.display = "flex";
+      statusBar.textContent = "已登入，資料存取中...";
+      document.getElementById("controls").style.display = "flex";
+      loadData();
+    }
+  });
+  client.requestAccessToken();
+}
+
+/* ========== 日期區間 ========== */
+function onRangeChange(){
+  const val = document.getElementById("range-select").value;
+  document.getElementById("custom-range").classList.toggle("show", val === "custom");
+}
+
+function getDateRange(){
+  const val = document.getElementById("range-select").value;
+  if(val === "custom"){
+    const s = document.getElementById("start-date").value;
+    const e = document.getElementById("end-date").value;
+    if(!s || !e){ return {startDate: "28daysAgo", endDate: "today"}; }
+    return {startDate: s, endDate: e};
+  }
+  return {startDate: `${val}daysAgo`, endDate: "today"};
+}
+
+/* ========== GA4 API 呼叫 ========== */
+async function runReport(body){
+  const res = await fetch(`https://analyticsdata.googleapis.com/v1beta/properties/${PROPERTY_ID}:runReport`, {
+    method: "POST",
+    headers: {
+      "Authorization": "Bearer " + accessToken,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+  if(!res.ok){
+    const errText = await res.text();
+    throw new Error(`GA4 API 錯誤 (${res.status})：${errText}`);
+  }
+  return res.json();
+}
+
+async function fetchGroupData(prefix, dateRange){
+  // 1) 各頁面 sessions
+  const sessionsBody = {
+    dateRanges: [dateRange],
+    dimensions: [{name:"pagePath"}],
+    metrics: [{name:"sessions"}],
+    dimensionFilter: {
+      filter: { fieldName:"pagePath", stringFilter:{ matchType:"BEGINS_WITH", value: prefix } }
+    },
+    limit: 100000
+  };
+
+  // 2) 各頁面各事件 次數
+  const eventsBody = {
+    dateRanges: [dateRange],
+    dimensions: [{name:"pagePath"}, {name:"eventName"}],
+    metrics: [{name:"eventCount"}],
+    dimensionFilter: {
+      andGroup: {
+        expressions: [
+          { filter: { fieldName:"pagePath", stringFilter:{ matchType:"BEGINS_WITH", value: prefix } } },
+          { filter: { fieldName:"eventName", inListFilter:{ values: EVENT_NAMES } } }
+        ]
+      }
+    },
+    limit: 100000
+  };
+
+  const [sessionsRes, eventsRes] = await Promise.all([
+    runReport(sessionsBody),
+    runReport(eventsBody)
+  ]);
+
+  return { sessionsRes, eventsRes };
+}
+
+/* 把 pagePath 對應到子資料夾名稱；不屬於任何子資料夾就算根目錄 */
+function resolveFolder(pagePath, prefix, folders){
+  const rest = pagePath.startsWith(prefix) ? pagePath.slice(prefix.length) : null;
+  if(rest === null) return null;
+  const firstSeg = rest.split("/")[0];
+  if(folders.includes(firstSeg)) return firstSeg;
+  return "__root__";
+}
+
+function aggregateGroup(group, sessionsRes, eventsRes){
+  const folderStats = {};
+  const ensure = (f) => {
+    if(!folderStats[f]) folderStats[f] = { sessions:0, events:{} , total:0};
+    return folderStats[f];
+  };
+
+  (sessionsRes.rows || []).forEach(row => {
+    const pagePath = row.dimensionValues[0].value;
+    const sessions = parseInt(row.metricValues[0].value, 10) || 0;
+    const folder = resolveFolder(pagePath, group.prefix, group.folders);
+    if(folder === null) return;
+    ensure(folder).sessions += sessions;
+  });
+
+  (eventsRes.rows || []).forEach(row => {
+    const pagePath = row.dimensionValues[0].value;
+    const eventName = row.dimensionValues[1].value;
+    const count = parseInt(row.metricValues[0].value, 10) || 0;
+    const folder = resolveFolder(pagePath, group.prefix, group.folders);
+    if(folder === null) return;
+    const stat = ensure(folder);
+    stat.events[eventName] = (stat.events[eventName] || 0) + count;
+    stat.total += count;
+  });
+
+  return folderStats;
+}
+
+/* ========== 呈現 ========== */
+function fmt(n){ return n.toLocaleString("en-US"); }
+
+function cvrClass(cvr){
+  if(cvr === 0) return "cvr-zero";
+  if(cvr >= 3) return "cvr-high";
+  return "cvr-mid";
+}
+
+function renderGroupTable(group, folderStats){
+  const allFolders = ["__root__", ...group.folders].filter(f => folderStats[f]);
+  let totalSessions = 0, totalConv = 0;
+  const eventTotals = {}; EVENT_NAMES.forEach(e => eventTotals[e] = 0);
+
+  const rows = allFolders.map(f => {
+    const stat = folderStats[f];
+    const sessions = stat.sessions;
+    const conv = stat.total;
+    const cvr = sessions > 0 ? (conv / sessions * 100) : 0;
+    totalSessions += sessions;
+    totalConv += conv;
+    EVENT_NAMES.forEach(e => eventTotals[e] += (stat.events[e] || 0));
+
+    const name = f === "__root__"
+      ? `<span class="folder-root">（頁面根目錄）</span>`
+      : `<span class="folder-name">${f}/</span>`;
+
+    return `<tr>
+      <td>${name}</td>
+      <td>${fmt(sessions)}</td>
+      ${EVENT_NAMES.map(e => `<td>${fmt(stat.events[e]||0)}</td>`).join("")}
+      <td>${fmt(conv)}</td>
+      <td class="${cvrClass(cvr)}">${cvr.toFixed(2)}%</td>
+    </tr>`;
+  }).join("");
+
+  const totalCvr = totalSessions > 0 ? (totalConv / totalSessions * 100) : 0;
+  const totalRow = `<tr class="total-row">
+    <td>合計</td>
+    <td>${fmt(totalSessions)}</td>
+    ${EVENT_NAMES.map(e => `<td>${fmt(eventTotals[e])}</td>`).join("")}
+    <td>${fmt(totalConv)}</td>
+    <td>${totalCvr.toFixed(2)}%</td>
+  </tr>`;
+
+  return {
+    html: `
+    <section class="group">
+      <h2>${group.label} <span class="path-tag">${group.prefix}</span></h2>
+      <p class="desc">依子資料夾拆解工作階段與轉換次數，CVR = 轉換次數 ÷ 工作階段</p>
+      <table>
+        <thead>
+          <tr>
+            <th>資料夾</th>
+            <th>工作階段</th>
+            ${EVENT_NAMES.map(e => `<th>${e}</th>`).join("")}
+            <th>轉換總數</th>
+            <th>CVR</th>
+          </tr>
+        </thead>
+        <tbody>${rows}${totalRow}</tbody>
+      </table>
+    </section>`,
+    totalSessions, totalConv, totalCvr
+  };
+}
+
+function showError(msg){
+  document.getElementById("content").innerHTML = `<div class="error-box">${msg}</div>`;
+}
+
+/* ========== 主流程 ========== */
+async function loadData(){
+  const refreshBtn = document.getElementById("refresh-btn");
+  refreshBtn.disabled = true;
+  refreshBtn.innerHTML = `<span class="spinner"></span> 讀取中`;
+  document.getElementById("content").innerHTML = `<div class="hint">資料讀取中，請稍候...</div>`;
+
+  try{
+    const dateRange = getDateRange();
+    let overviewHtml = "";
+    let groupsHtml = "";
+
+    for(const group of GROUPS){
+      const { sessionsRes, eventsRes } = await fetchGroupData(group.prefix, dateRange);
+      const folderStats = aggregateGroup(group, sessionsRes, eventsRes);
+      const { html, totalSessions, totalConv, totalCvr } = renderGroupTable(group, folderStats);
+      groupsHtml += html;
+
+      overviewHtml += `
+        <div class="kpi ${group.key === 'hrm104' ? 'rose' : ''}">
+          <div class="label">${group.label} 工作階段</div>
+          <div class="value">${fmt(totalSessions)}</div>
+          <div class="sub">轉換 ${fmt(totalConv)} 次 · CVR ${totalCvr.toFixed(2)}%</div>
+        </div>`;
+    }
+
+    document.getElementById("content").innerHTML = `
+      <div class="overview">${overviewHtml}</div>
+      ${groupsHtml}
+    `;
+
+    document.getElementById("last-updated").textContent =
+      "上次更新：" + new Date().toLocaleString("zh-TW");
+
+  }catch(err){
+    showError("讀取資料時發生錯誤：\n" + err.message);
+  }finally{
+    refreshBtn.disabled = false;
+    refreshBtn.textContent = "重新整理";
+  }
+}
+</script>
+</body>
+</html>
