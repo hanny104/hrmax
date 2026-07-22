@@ -377,18 +377,17 @@ async function fetchGroupData(prefix, dateRange){
 async function fetchSourceMediumData(prefix, dateRange){
   const sessionsBody = {
     dateRanges: [dateRange],
-    dimensions: [{name:"sessionSourceMedium"}],
+    dimensions: [{name:"date"}, {name:"sessionSourceMedium"}],
     metrics: [{name:"sessions"}],
     dimensionFilter: {
       filter: { fieldName:"pagePath", stringFilter:{ matchType:"BEGINS_WITH", value: prefix } }
     },
-    orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
     limit: 100000
   };
 
   const eventsBody = {
     dateRanges: [dateRange],
-    dimensions: [{name:"sessionSourceMedium"}, {name:"eventName"}],
+    dimensions: [{name:"date"}, {name:"sessionSourceMedium"}, {name:"eventName"}],
     metrics: [{name:"eventCount"}],
     dimensionFilter: {
       andGroup: {
@@ -417,7 +416,7 @@ function aggregateSourceMedium(sessionsRes, eventsRes){
   };
 
   (sessionsRes.rows || []).forEach(row => {
-    const rawKey = row.dimensionValues[0].value;
+    const rawKey = row.dimensionValues[1].value;
     const channel = classifyChannel(rawKey);
     const sessions = parseInt(row.metricValues[0].value, 10) || 0;
     const stat = ensure(channel);
@@ -426,9 +425,9 @@ function aggregateSourceMedium(sessionsRes, eventsRes){
   });
 
   (eventsRes.rows || []).forEach(row => {
-    const rawKey = row.dimensionValues[0].value;
+    const rawKey = row.dimensionValues[1].value;
     const channel = classifyChannel(rawKey);
-    const eventName = row.dimensionValues[1].value;
+    const eventName = row.dimensionValues[2].value;
     const count = parseInt(row.metricValues[0].value, 10) || 0;
     const stat = ensure(channel);
     stat.events[eventName] = (stat.events[eventName] || 0) + count;
@@ -436,6 +435,56 @@ function aggregateSourceMedium(sessionsRes, eventsRes){
   });
 
   return stats;
+}
+
+/* ========== 週報彙整（週四~週三為一週） ========== */
+function getThuWedWeek(dateStr){
+  // dateStr 格式為 GA4 回傳的 yyyymmdd
+  const y = +dateStr.slice(0,4), m = +dateStr.slice(4,6)-1, d = +dateStr.slice(6,8);
+  const dt = new Date(Date.UTC(y,m,d));
+  const dow = dt.getUTCDay(); // 0=Sun ... 4=Thu ... 6=Sat
+  const offset = (dow - 4 + 7) % 7; // 距離本週四已經過幾天
+  const weekStart = new Date(dt); weekStart.setUTCDate(dt.getUTCDate() - offset);
+  const weekEnd = new Date(weekStart); weekEnd.setUTCDate(weekStart.getUTCDate() + 6);
+  const md = (x) => `${x.getUTCMonth()+1}/${x.getUTCDate()}`;
+  return {
+    key: weekStart.toISOString().slice(0,10),
+    label: `${md(weekStart)}~${md(weekEnd)}`
+  };
+}
+
+/* 依 date+sessionSourceMedium(+eventName) 彙整成 { weekKey: { label, channels: { channel: {sessions, conv} } } } */
+function aggregateWeeklyChannel(sessionsRes, eventsRes){
+  const weeks = {};
+  const ensureWeek = (dateStr) => {
+    const { key, label } = getThuWedWeek(dateStr);
+    if(!weeks[key]) weeks[key] = { label, channels: {} };
+    return weeks[key];
+  };
+  const ensureChannel = (week, channel) => {
+    if(!week.channels[channel]) week.channels[channel] = { sessions:0, conv:0 };
+    return week.channels[channel];
+  };
+
+  (sessionsRes.rows || []).forEach(row => {
+    const dateStr = row.dimensionValues[0].value;
+    const rawKey = row.dimensionValues[1].value;
+    const channel = classifyChannel(rawKey);
+    const sessions = parseInt(row.metricValues[0].value, 10) || 0;
+    const week = ensureWeek(dateStr);
+    ensureChannel(week, channel).sessions += sessions;
+  });
+
+  (eventsRes.rows || []).forEach(row => {
+    const dateStr = row.dimensionValues[0].value;
+    const rawKey = row.dimensionValues[1].value;
+    const channel = classifyChannel(rawKey);
+    const count = parseInt(row.metricValues[0].value, 10) || 0;
+    const week = ensureWeek(dateStr);
+    ensureChannel(week, channel).conv += count;
+  });
+
+  return weeks;
 }
 
 function renderSourceMediumTable(group, stats){
@@ -498,19 +547,18 @@ function renderSourceMediumTable(group, stats){
 }
 
 /* ========== 自訂通路分組（依 source/medium 關鍵字判斷，依序檢查，符合就停止） ========== */
-const CHANNEL_ORDER = ["文章","自然搜尋","G關鍵字","EDM","集團","社群","其他"];
+const CHANNEL_ORDER = ["直接流量/其他","自然搜尋","G關鍵字","EDM","集團+HA廣宣","社群"];
 
 function classifyChannel(sourceMedium){
   const s = (sourceMedium || "").toLowerCase();
   const has = (...keys) => keys.some(k => s.includes(k));
 
   if(has("edm","ccrm")) return "EDM";
-  if(has("blog")) return "文章";                 // 已排除 edm/ccrm（上面已先判斷掉）
-  if(has("104","vip","hrm","surveycake","jb","footer")) return "集團"; // 已排除 blog/edm/ccrm
+  if(has("organic","blog")) return "自然搜尋";        // 文章(blog) 併入自然搜尋
+  if(has("104","vip","hrm","surveycake","jb","footer")) return "集團+HA廣宣"; // 已排除 blog/edm/ccrm
   if(has("facebook","fb","line","linkedin","meta")) return "社群";
-  if(has("organic")) return "自然搜尋";
   if(has("cpc")) return "G關鍵字";
-  return "其他";
+  return "直接流量/其他"; // 含 (direct)/(none) 及其他未分類流量
 }
 
 /* 把 pagePath 對應到子資料夾名稱；不屬於任何子資料夾就算根目錄 */
@@ -618,6 +666,106 @@ function renderGroupTable(group, folderStats){
   };
 }
 
+function renderWeeklyMatrix(maxWeekly, plusWeekly){
+  // 合併兩組的週別 key，並照時間排序
+  const allWeekKeys = Array.from(new Set([...Object.keys(maxWeekly), ...Object.keys(plusWeekly)])).sort();
+
+  const getCell = (weekly, weekKey, channel) => {
+    const w = weekly[weekKey];
+    if(!w || !w.channels[channel]) return { sessions:0, conv:0 };
+    return w.channels[channel];
+  };
+
+  // 表頭
+  let thead = `<tr>
+    <th rowspan="2" style="text-align:left;">週（週四~週三）</th>
+    <th colspan="3">總計</th>
+    ${CHANNEL_ORDER.map(c => `<th colspan="7">${c}</th>`).join("")}
+  </tr>
+  <tr>
+    <th>總使用者</th><th>總轉換</th><th>轉換率</th>
+    ${CHANNEL_ORDER.map(() => `
+      <th>Max使用者</th><th>Max轉換</th><th>3+1使用者</th><th>3+1轉換</th>
+      <th>總使用者</th><th>總轉換數</th><th>總轉換率</th>
+    `).join("")}
+  </tr>`;
+
+  // 用於「本期合計」列的累加
+  const grand = { sessions:0, conv:0 };
+  const grandByChannel = {}; CHANNEL_ORDER.forEach(c => grandByChannel[c] = { max:{sessions:0,conv:0}, plus:{sessions:0,conv:0} });
+
+  const bodyRows = allWeekKeys.map(weekKey => {
+    const label = (maxWeekly[weekKey] || plusWeekly[weekKey]).label;
+    let weekTotalSessions = 0, weekTotalConv = 0;
+    let channelCells = "";
+
+    CHANNEL_ORDER.forEach(channel => {
+      const maxCell = getCell(maxWeekly, weekKey, channel);
+      const plusCell = getCell(plusWeekly, weekKey, channel);
+      const totalSessions = maxCell.sessions + plusCell.sessions;
+      const totalConv = maxCell.conv + plusCell.conv;
+      const cvr = totalSessions > 0 ? (totalConv/totalSessions*100) : 0;
+
+      weekTotalSessions += totalSessions;
+      weekTotalConv += totalConv;
+
+      grandByChannel[channel].max.sessions += maxCell.sessions;
+      grandByChannel[channel].max.conv += maxCell.conv;
+      grandByChannel[channel].plus.sessions += plusCell.sessions;
+      grandByChannel[channel].plus.conv += plusCell.conv;
+
+      channelCells += `
+        <td>${fmt(maxCell.sessions)}</td><td>${fmt(maxCell.conv)}</td>
+        <td>${fmt(plusCell.sessions)}</td><td>${fmt(plusCell.conv)}</td>
+        <td>${fmt(totalSessions)}</td><td>${fmt(totalConv)}</td>
+        <td class="${cvrClass(cvr)}">${cvr.toFixed(2)}%</td>`;
+    });
+
+    grand.sessions += weekTotalSessions;
+    grand.conv += weekTotalConv;
+    const weekCvr = weekTotalSessions > 0 ? (weekTotalConv/weekTotalSessions*100) : 0;
+
+    return `<tr>
+      <td style="text-align:left;">${label}</td>
+      <td>${fmt(weekTotalSessions)}</td><td>${fmt(weekTotalConv)}</td>
+      <td class="${cvrClass(weekCvr)}">${weekCvr.toFixed(2)}%</td>
+      ${channelCells}
+    </tr>`;
+  }).join("");
+
+  // 本期合計列
+  let grandChannelCells = "";
+  CHANNEL_ORDER.forEach(channel => {
+    const g = grandByChannel[channel];
+    const totalSessions = g.max.sessions + g.plus.sessions;
+    const totalConv = g.max.conv + g.plus.conv;
+    const cvr = totalSessions > 0 ? (totalConv/totalSessions*100) : 0;
+    grandChannelCells += `
+      <td>${fmt(g.max.sessions)}</td><td>${fmt(g.max.conv)}</td>
+      <td>${fmt(g.plus.sessions)}</td><td>${fmt(g.plus.conv)}</td>
+      <td>${fmt(totalSessions)}</td><td>${fmt(totalConv)}</td>
+      <td>${cvr.toFixed(2)}%</td>`;
+  });
+  const grandCvr = grand.sessions > 0 ? (grand.conv/grand.sessions*100) : 0;
+  const grandRow = `<tr class="total-row">
+    <td style="text-align:left;">本期合計</td>
+    <td>${fmt(grand.sessions)}</td><td>${fmt(grand.conv)}</td><td>${grandCvr.toFixed(2)}%</td>
+    ${grandChannelCells}
+  </tr>`;
+
+  return `
+    <section class="group">
+      <h2>週報彙整表 <span class="path-tag">HRMax + 104hrm 合併</span></h2>
+      <p class="desc">每週四至週三為一週，Max = HRMax（/products/HRMax/），3+1 = 104hrm（/products/104hrm/），總欄位為兩者合計</p>
+      <div style="overflow-x:auto;">
+        <table style="min-width:1400px;">
+          <thead>${thead}</thead>
+          <tbody>${bodyRows}${grandRow}</tbody>
+        </table>
+      </div>
+    </section>`;
+}
+
 function showError(msg){
   document.getElementById("content").innerHTML = `<div class="error-box">${msg}</div>`;
 }
@@ -634,6 +782,8 @@ async function loadData(){
     let overviewHtml = "";
     let groupsHtml = "";
 
+    let weeklyByGroup = {};
+
     for(const group of GROUPS){
       const { sessionsRes, eventsRes } = await fetchGroupData(group.prefix, dateRange);
       const folderStats = aggregateGroup(group, sessionsRes, eventsRes);
@@ -644,6 +794,8 @@ async function loadData(){
       const smStats = aggregateSourceMedium(smData.sessionsRes, smData.eventsRes);
       groupsHtml += renderSourceMediumTable(group, smStats);
 
+      weeklyByGroup[group.key] = aggregateWeeklyChannel(smData.sessionsRes, smData.eventsRes);
+
       overviewHtml += `
         <div class="kpi ${group.key === 'hrm104' ? 'rose' : ''}">
           <div class="label">${group.label} 工作階段</div>
@@ -652,9 +804,15 @@ async function loadData(){
         </div>`;
     }
 
+    const weeklyMatrixHtml = renderWeeklyMatrix(
+      weeklyByGroup["hrmax"] || {},
+      weeklyByGroup["hrm104"] || {}
+    );
+
     document.getElementById("content").innerHTML = `
       <div class="overview">${overviewHtml}</div>
       ${groupsHtml}
+      ${weeklyMatrixHtml}
     `;
 
     document.getElementById("last-updated").textContent =
