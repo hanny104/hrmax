@@ -766,40 +766,84 @@ function renderWeeklyMatrix(maxWeekly, plusWeekly){
     </section>`;
 }
 
-function renderChannelSummary(combinedStats){
-  const rows = CHANNEL_ORDER.filter(c => combinedStats[c]).map(channel => {
-    const stat = combinedStats[channel];
-    const cvr = stat.sessions > 0 ? (stat.conv/stat.sessions*100) : 0;
+function renderChannelSummary(maxWeekly, plusWeekly){
+  const allWeekKeys = Array.from(new Set([...Object.keys(maxWeekly), ...Object.keys(plusWeekly)])).sort();
+
+  const getCell = (weekly, weekKey, channel) => {
+    const w = weekly[weekKey];
+    if(!w || !w.channels[channel]) return { sessions:0, conv:0 };
+    return w.channels[channel];
+  };
+
+  const thead = `<tr>
+    <th style="text-align:left;">週（週四~週三）</th>
+    <th colspan="3">總計</th>
+    ${CHANNEL_ORDER.map(c => `<th colspan="3">${c}</th>`).join("")}
+  </tr>
+  <tr>
+    <th></th>
+    <th>總使用者</th><th>總轉換數</th><th>總轉換率</th>
+    ${CHANNEL_ORDER.map(() => `<th>總使用者</th><th>總轉換數</th><th>總轉換率</th>`).join("")}
+  </tr>`;
+
+  const grand = { sessions:0, conv:0 };
+  const grandByChannel = {}; CHANNEL_ORDER.forEach(c => grandByChannel[c] = { sessions:0, conv:0 });
+
+  const bodyRows = allWeekKeys.map(weekKey => {
+    const label = (maxWeekly[weekKey] || plusWeekly[weekKey]).label;
+    let weekTotalSessions = 0, weekTotalConv = 0;
+    let channelCells = "";
+
+    CHANNEL_ORDER.forEach(channel => {
+      const maxCell = getCell(maxWeekly, weekKey, channel);
+      const plusCell = getCell(plusWeekly, weekKey, channel);
+      const sessions = maxCell.sessions + plusCell.sessions;
+      const conv = maxCell.conv + plusCell.conv;
+      const cvr = sessions > 0 ? (conv/sessions*100) : 0;
+
+      weekTotalSessions += sessions;
+      weekTotalConv += conv;
+      grandByChannel[channel].sessions += sessions;
+      grandByChannel[channel].conv += conv;
+
+      channelCells += `<td>${fmt(sessions)}</td><td>${fmt(conv)}</td><td class="${cvrClass(cvr)}">${cvr.toFixed(2)}%</td>`;
+    });
+
+    grand.sessions += weekTotalSessions;
+    grand.conv += weekTotalConv;
+    const weekCvr = weekTotalSessions > 0 ? (weekTotalConv/weekTotalSessions*100) : 0;
+
     return `<tr>
-      <td style="text-align:left;">${channel}</td>
-      <td>${fmt(stat.sessions)}</td>
-      <td>${fmt(stat.conv)}</td>
-      <td class="${cvrClass(cvr)}">${cvr.toFixed(2)}%</td>
+      <td style="text-align:left;">${label}</td>
+      <td>${fmt(weekTotalSessions)}</td><td>${fmt(weekTotalConv)}</td>
+      <td class="${cvrClass(weekCvr)}">${weekCvr.toFixed(2)}%</td>
+      ${channelCells}
     </tr>`;
   }).join("");
 
-  let totalSessions = 0, totalConv = 0;
-  CHANNEL_ORDER.forEach(c => {
-    if(combinedStats[c]){ totalSessions += combinedStats[c].sessions; totalConv += combinedStats[c].conv; }
+  let grandChannelCells = "";
+  CHANNEL_ORDER.forEach(channel => {
+    const g = grandByChannel[channel];
+    const cvr = g.sessions > 0 ? (g.conv/g.sessions*100) : 0;
+    grandChannelCells += `<td>${fmt(g.sessions)}</td><td>${fmt(g.conv)}</td><td>${cvr.toFixed(2)}%</td>`;
   });
-  const totalCvr = totalSessions > 0 ? (totalConv/totalSessions*100) : 0;
-  const totalRow = `<tr class="total-row">
+  const grandCvr = grand.sessions > 0 ? (grand.conv/grand.sessions*100) : 0;
+  const grandRow = `<tr class="total-row">
     <td style="text-align:left;">總計</td>
-    <td>${fmt(totalSessions)}</td>
-    <td>${fmt(totalConv)}</td>
-    <td>${totalCvr.toFixed(2)}%</td>
+    <td>${fmt(grand.sessions)}</td><td>${fmt(grand.conv)}</td><td>${grandCvr.toFixed(2)}%</td>
+    ${grandChannelCells}
   </tr>`;
 
   return `
     <section class="group">
       <h2>通路總覽 <span class="path-tag">HRMax + 104hrm 合併・可直接截圖</span></h2>
-      <p class="desc">依通路的總使用者、總轉換數、總轉換率，供報告直接引用</p>
-      <table style="max-width:560px;">
-        <thead>
-          <tr><th style="text-align:left;">通路</th><th>總使用者</th><th>總轉換數</th><th>總轉換率</th></tr>
-        </thead>
-        <tbody>${rows}${totalRow}</tbody>
-      </table>
+      <p class="desc">每週四至週三為一週，各通路僅顯示總使用者/總轉換數/總轉換率，供報告直接引用</p>
+      <div style="overflow-x:auto;">
+        <table style="min-width:900px;">
+          <thead>${thead}</thead>
+          <tbody>${bodyRows}${grandRow}</tbody>
+        </table>
+      </div>
     </section>`;
 }
 
@@ -843,17 +887,11 @@ async function loadData(){
         </div>`;
     }
 
-    // 合併兩組的通路統計，做成精簡總覽
-    const combinedChannelStats = {};
-    CHANNEL_ORDER.forEach(channel => {
-      const hrmax = (smStatsByGroup["hrmax"] || {})[channel];
-      const hrm104 = (smStatsByGroup["hrm104"] || {})[channel];
-      combinedChannelStats[channel] = {
-        sessions: (hrmax ? hrmax.sessions : 0) + (hrm104 ? hrm104.sessions : 0),
-        conv: (hrmax ? hrmax.total : 0) + (hrm104 ? hrm104.total : 0)
-      };
-    });
-    const channelSummaryHtml = renderChannelSummary(combinedChannelStats);
+    // 合併兩組的週別×通路資料，做成精簡總覽（含每週+總計）
+    const channelSummaryHtml = renderChannelSummary(
+      weeklyByGroup["hrmax"] || {},
+      weeklyByGroup["hrm104"] || {}
+    );
 
     const weeklyMatrixHtml = renderWeeklyMatrix(
       weeklyByGroup["hrmax"] || {},
