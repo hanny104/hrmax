@@ -547,7 +547,7 @@ function renderSourceMediumTable(group, stats){
 }
 
 /* ========== 自訂通路分組（依 source/medium 關鍵字判斷，依序檢查，符合就停止） ========== */
-const CHANNEL_ORDER = ["直接流量/其他","自然搜尋","G關鍵字","EDM","集團+HA廣宣","社群"];
+const CHANNEL_ORDER = ["自然搜尋","G關鍵字","EDM","集團+HA廣宣","社群","直接流量/其他"];
 
 function classifyChannel(sourceMedium){
   const s = (sourceMedium || "").toLowerCase();
@@ -766,6 +766,43 @@ function renderWeeklyMatrix(maxWeekly, plusWeekly){
     </section>`;
 }
 
+function renderChannelSummary(combinedStats){
+  const rows = CHANNEL_ORDER.filter(c => combinedStats[c]).map(channel => {
+    const stat = combinedStats[channel];
+    const cvr = stat.sessions > 0 ? (stat.conv/stat.sessions*100) : 0;
+    return `<tr>
+      <td style="text-align:left;">${channel}</td>
+      <td>${fmt(stat.sessions)}</td>
+      <td>${fmt(stat.conv)}</td>
+      <td class="${cvrClass(cvr)}">${cvr.toFixed(2)}%</td>
+    </tr>`;
+  }).join("");
+
+  let totalSessions = 0, totalConv = 0;
+  CHANNEL_ORDER.forEach(c => {
+    if(combinedStats[c]){ totalSessions += combinedStats[c].sessions; totalConv += combinedStats[c].conv; }
+  });
+  const totalCvr = totalSessions > 0 ? (totalConv/totalSessions*100) : 0;
+  const totalRow = `<tr class="total-row">
+    <td style="text-align:left;">總計</td>
+    <td>${fmt(totalSessions)}</td>
+    <td>${fmt(totalConv)}</td>
+    <td>${totalCvr.toFixed(2)}%</td>
+  </tr>`;
+
+  return `
+    <section class="group">
+      <h2>通路總覽 <span class="path-tag">HRMax + 104hrm 合併・可直接截圖</span></h2>
+      <p class="desc">依通路的總使用者、總轉換數、總轉換率，供報告直接引用</p>
+      <table style="max-width:560px;">
+        <thead>
+          <tr><th style="text-align:left;">通路</th><th>總使用者</th><th>總轉換數</th><th>總轉換率</th></tr>
+        </thead>
+        <tbody>${rows}${totalRow}</tbody>
+      </table>
+    </section>`;
+}
+
 function showError(msg){
   document.getElementById("content").innerHTML = `<div class="error-box">${msg}</div>`;
 }
@@ -783,6 +820,7 @@ async function loadData(){
     let groupsHtml = "";
 
     let weeklyByGroup = {};
+    let smStatsByGroup = {};
 
     for(const group of GROUPS){
       const { sessionsRes, eventsRes } = await fetchGroupData(group.prefix, dateRange);
@@ -792,6 +830,7 @@ async function loadData(){
 
       const smData = await fetchSourceMediumData(group.prefix, dateRange);
       const smStats = aggregateSourceMedium(smData.sessionsRes, smData.eventsRes);
+      smStatsByGroup[group.key] = smStats;
       groupsHtml += renderSourceMediumTable(group, smStats);
 
       weeklyByGroup[group.key] = aggregateWeeklyChannel(smData.sessionsRes, smData.eventsRes);
@@ -804,6 +843,18 @@ async function loadData(){
         </div>`;
     }
 
+    // 合併兩組的通路統計，做成精簡總覽
+    const combinedChannelStats = {};
+    CHANNEL_ORDER.forEach(channel => {
+      const hrmax = (smStatsByGroup["hrmax"] || {})[channel];
+      const hrm104 = (smStatsByGroup["hrm104"] || {})[channel];
+      combinedChannelStats[channel] = {
+        sessions: (hrmax ? hrmax.sessions : 0) + (hrm104 ? hrm104.sessions : 0),
+        conv: (hrmax ? hrmax.total : 0) + (hrm104 ? hrm104.total : 0)
+      };
+    });
+    const channelSummaryHtml = renderChannelSummary(combinedChannelStats);
+
     const weeklyMatrixHtml = renderWeeklyMatrix(
       weeklyByGroup["hrmax"] || {},
       weeklyByGroup["hrm104"] || {}
@@ -811,6 +862,7 @@ async function loadData(){
 
     document.getElementById("content").innerHTML = `
       <div class="overview">${overviewHtml}</div>
+      ${channelSummaryHtml}
       ${groupsHtml}
       ${weeklyMatrixHtml}
     `;
