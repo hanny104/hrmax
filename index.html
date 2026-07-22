@@ -412,21 +412,25 @@ async function fetchSourceMediumData(prefix, dateRange){
 function aggregateSourceMedium(sessionsRes, eventsRes){
   const stats = {};
   const ensure = (key) => {
-    if(!stats[key]) stats[key] = { sessions:0, events:{}, total:0 };
+    if(!stats[key]) stats[key] = { sessions:0, events:{}, total:0, raw:{} };
     return stats[key];
   };
 
   (sessionsRes.rows || []).forEach(row => {
-    const key = row.dimensionValues[0].value;
+    const rawKey = row.dimensionValues[0].value;
+    const channel = classifyChannel(rawKey);
     const sessions = parseInt(row.metricValues[0].value, 10) || 0;
-    ensure(key).sessions += sessions;
+    const stat = ensure(channel);
+    stat.sessions += sessions;
+    stat.raw[rawKey] = (stat.raw[rawKey] || 0) + sessions;
   });
 
   (eventsRes.rows || []).forEach(row => {
-    const key = row.dimensionValues[0].value;
+    const rawKey = row.dimensionValues[0].value;
+    const channel = classifyChannel(rawKey);
     const eventName = row.dimensionValues[1].value;
     const count = parseInt(row.metricValues[0].value, 10) || 0;
-    const stat = ensure(key);
+    const stat = ensure(channel);
     stat.events[eventName] = (stat.events[eventName] || 0) + count;
     stat.total += count;
   });
@@ -435,7 +439,7 @@ function aggregateSourceMedium(sessionsRes, eventsRes){
 }
 
 function renderSourceMediumTable(group, stats){
-  const keys = Object.keys(stats).sort((a,b) => stats[b].sessions - stats[a].sessions);
+  const keys = CHANNEL_ORDER.filter(k => stats[k]);
   let totalSessions = 0, totalConv = 0;
   const eventTotals = {}; EVENT_NAMES.forEach(e => eventTotals[e] = 0);
 
@@ -448,8 +452,16 @@ function renderSourceMediumTable(group, stats){
     totalConv += conv;
     EVENT_NAMES.forEach(e => eventTotals[e] += (stat.events[e] || 0));
 
+    // 顯示該通路底下前3個原始 source/medium，方便核對分類是否準確
+    const rawTop = Object.entries(stat.raw)
+      .sort((a,b) => b[1]-a[1]).slice(0,3)
+      .map(([k,v]) => `${k} (${fmt(v)})`).join("、");
+
     return `<tr>
-      <td><span class="folder-name">${key}</span></td>
+      <td>
+        <span class="folder-name">${key}</span>
+        ${rawTop ? `<div style="font-size:11px;color:var(--ink-soft);margin-top:2px;">${rawTop}</div>` : ""}
+      </td>
       <td>${fmt(sessions)}</td>
       ${EVENT_NAMES.map(e => `<td>${fmt(stat.events[e]||0)}</td>`).join("")}
       <td>${fmt(conv)}</td>
@@ -468,12 +480,12 @@ function renderSourceMediumTable(group, stats){
 
   return `
     <section class="group">
-      <h2>${group.label} <span class="path-tag">依來源/媒介</span></h2>
-      <p class="desc">來源/媒介（sessionSourceMedium）× 工作階段與轉換次數，依工作階段排序</p>
+      <h2>${group.label} <span class="path-tag">依通路分類</span></h2>
+      <p class="desc">依 source/medium 關鍵字自訂分組（文章/自然搜尋/G關鍵字/EDM/集團/社群/其他），灰色小字為該通路內前3大原始來源/媒介</p>
       <table>
         <thead>
           <tr>
-            <th>來源 / 媒介</th>
+            <th>通路</th>
             <th>工作階段</th>
             ${EVENT_NAMES.map(e => `<th>${e}</th>`).join("")}
             <th>轉換總數</th>
@@ -483,6 +495,22 @@ function renderSourceMediumTable(group, stats){
         <tbody>${rows}${totalRow}</tbody>
       </table>
     </section>`;
+}
+
+/* ========== 自訂通路分組（依 source/medium 關鍵字判斷，依序檢查，符合就停止） ========== */
+const CHANNEL_ORDER = ["文章","自然搜尋","G關鍵字","EDM","集團","社群","其他"];
+
+function classifyChannel(sourceMedium){
+  const s = (sourceMedium || "").toLowerCase();
+  const has = (...keys) => keys.some(k => s.includes(k));
+
+  if(has("edm","ccrm")) return "EDM";
+  if(has("blog")) return "文章";                 // 已排除 edm/ccrm（上面已先判斷掉）
+  if(has("104","vip","hrm","surveycake","jb","footer")) return "集團"; // 已排除 blog/edm/ccrm
+  if(has("facebook","fb","line","linkedin","meta")) return "社群";
+  if(has("organic")) return "自然搜尋";
+  if(has("cpc")) return "G關鍵字";
+  return "其他";
 }
 
 /* 把 pagePath 對應到子資料夾名稱；不屬於任何子資料夾就算根目錄 */
