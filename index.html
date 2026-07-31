@@ -847,6 +847,83 @@ function renderChannelSummary(maxWeekly, plusWeekly){
     </section>`;
 }
 
+/* ========== AI 來源判斷 ========== */
+const AI_KEYWORDS = ["chatgpt","gemini","claude","perplexity","ai-assistant","openai","copilot","bard"];
+function isAiSource(sourceMedium){
+  const s = (sourceMedium || "").toLowerCase();
+  if(AI_KEYWORDS.some(k => s.includes(k))) return true;
+  if(s.includes(".ai")) return true; // 其他 .ai 網域的 AI 服務
+  return false;
+}
+
+/* ========== 事件明細表（事件名稱 / 來源媒介 / 日期 / 計數） ========== */
+function formatGaDate(dateStr){
+  return `${dateStr.slice(0,4)}/${dateStr.slice(4,6)}/${dateStr.slice(6,8)}`;
+}
+
+function renderEventDetailTable(rows){
+  const sorted = [...rows].sort((a,b) => {
+    if(a.date !== b.date) return b.date.localeCompare(a.date); // 日期新到舊
+    return b.count - a.count; // 同日期依計數高到低
+  });
+
+  const bodyRows = sorted.map(r => `
+    <tr>
+      <td style="text-align:left;">${r.eventName}</td>
+      <td style="text-align:left;">${r.sourceMedium}</td>
+      <td>${formatGaDate(r.date)}</td>
+      <td>${fmt(r.count)}</td>
+    </tr>`).join("");
+
+  return `
+    <section class="group">
+      <h2>事件明細表 <span class="path-tag">HRMax + 104hrm・逐筆來源</span></h2>
+      <p class="desc">共 ${sorted.length} 筆，依日期新到舊排序，可用來追查每一次轉換的實際來源/媒介</p>
+      <div style="max-height:480px; overflow-y:auto; overflow-x:auto; border:1px solid var(--line); border-radius:10px;">
+        <table style="border:none; border-radius:0;">
+          <thead style="position:sticky; top:0; z-index:1;">
+            <tr>
+              <th style="text-align:left;">事件名稱</th>
+              <th style="text-align:left;">工作階段來源/媒介</th>
+              <th>事件發生日期</th>
+              <th>事件計數</th>
+            </tr>
+          </thead>
+          <tbody>${bodyRows}</tbody>
+        </table>
+      </div>
+    </section>`;
+}
+
+/* ========== AI 引流來源表（獨立參考） ========== */
+function renderAiSourceTable(aiStats){
+  const keys = Object.keys(aiStats).sort((a,b) => aiStats[b] - aiStats[a]);
+  if(keys.length === 0){
+    return `
+    <section class="group">
+      <h2>AI 引流來源 <span class="path-tag">參考用・非主表</span></h2>
+      <p class="desc">目前選定區間內，工作階段來源/媒介尚未偵測到 AI 相關流量（chatgpt / gemini / claude / perplexity / ai-assistant 等）</p>
+    </section>`;
+  }
+  const rows = keys.map(k => `
+    <tr>
+      <td style="text-align:left;">${k}</td>
+      <td>${fmt(aiStats[k])}</td>
+    </tr>`).join("");
+  const total = keys.reduce((sum,k) => sum + aiStats[k], 0);
+  const totalRow = `<tr class="total-row"><td style="text-align:left;">總計</td><td>${fmt(total)}</td></tr>`;
+
+  return `
+    <section class="group">
+      <h2>AI 引流來源 <span class="path-tag">參考用・非主表</span></h2>
+      <p class="desc">工作階段來源/媒介 含 AI 相關關鍵字（chatgpt/gemini/claude/perplexity/ai-assistant/其他 .ai 網域）的工作階段數</p>
+      <table style="max-width:480px;">
+        <thead><tr><th style="text-align:left;">工作階段來源/媒介</th><th>計數</th></tr></thead>
+        <tbody>${rows}${totalRow}</tbody>
+      </table>
+    </section>`;
+}
+
 function showError(msg){
   document.getElementById("content").innerHTML = `<div class="error-box">${msg}</div>`;
 }
@@ -865,6 +942,8 @@ async function loadData(){
 
     let weeklyByGroup = {};
     let smStatsByGroup = {};
+    let allEventRows = [];
+    let aiStats = {};
 
     for(const group of GROUPS){
       const { sessionsRes, eventsRes } = await fetchGroupData(group.prefix, dateRange);
@@ -879,6 +958,25 @@ async function loadData(){
 
       weeklyByGroup[group.key] = aggregateWeeklyChannel(smData.sessionsRes, smData.eventsRes);
 
+      // 收集事件明細（事件名稱 / 來源媒介 / 日期 / 計數）
+      (smData.eventsRes.rows || []).forEach(row => {
+        allEventRows.push({
+          date: row.dimensionValues[0].value,
+          sourceMedium: row.dimensionValues[1].value,
+          eventName: row.dimensionValues[2].value,
+          count: parseInt(row.metricValues[0].value, 10) || 0
+        });
+      });
+
+      // 收集 AI 來源工作階段數
+      (smData.sessionsRes.rows || []).forEach(row => {
+        const sourceMedium = row.dimensionValues[1].value;
+        if(isAiSource(sourceMedium)){
+          const sessions = parseInt(row.metricValues[0].value, 10) || 0;
+          aiStats[sourceMedium] = (aiStats[sourceMedium] || 0) + sessions;
+        }
+      });
+
       overviewHtml += `
         <div class="kpi ${group.key === 'hrm104' ? 'rose' : ''}">
           <div class="label">${group.label} 工作階段</div>
@@ -886,6 +984,8 @@ async function loadData(){
           <div class="sub">轉換 ${fmt(totalConv)} 次 · CVR ${totalCvr.toFixed(2)}%</div>
         </div>`;
     }
+
+    const eventDetailHtml = renderEventDetailTable(allEventRows);
 
     // 合併兩組的週別×通路資料，做成精簡總覽（含每週+總計）
     const channelSummaryHtml = renderChannelSummary(
@@ -898,11 +998,15 @@ async function loadData(){
       weeklyByGroup["hrm104"] || {}
     );
 
+    const aiSourceHtml = renderAiSourceTable(aiStats);
+
     document.getElementById("content").innerHTML = `
       <div class="overview">${overviewHtml}</div>
+      ${eventDetailHtml}
       ${channelSummaryHtml}
       ${groupsHtml}
       ${weeklyMatrixHtml}
+      ${aiSourceHtml}
     `;
 
     document.getElementById("last-updated").textContent =
